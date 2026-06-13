@@ -1,0 +1,66 @@
+# Local end-to-end stack for the hosted (Tier-1) gstack experience.
+# Runs from the repo root because the broker Dockerfile pulls in ../data/.
+#
+#   (from repo root)
+#   docker compose -f hosted/docker-compose.yml up postgres broker
+#   cd hosted/gstack-web && npm install && npx next dev -p 3030
+#
+# Bring a worker in (requires a gw_ key minted via the web UI or REST):
+#   GW=gw_... docker compose -f hosted/docker-compose.yml up worker
+#
+# Production deploy is: broker → Fly.io, postgres → Fly Postgres or Supabase,
+# frontend → Vercel. See HOSTING.md.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     gstack
+      POSTGRES_PASSWORD: gstack
+      POSTGRES_DB:       gstack
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "gstack"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  broker:
+    build:
+      context: ..                            # repo root
+      dockerfile: hosted/broker/Dockerfile
+    environment:
+      DATABASE_URL:                postgresql://gstack:gstack@postgres:5432/gstack
+      # Leave CLERK_JWKS_URL unset to use the dev-fallback (X-Dev-User-Id).
+      # CLERK_JWKS_URL:            https://<your>.clerk.accounts.dev/.well-known/jwks.json
+      # CLERK_ISSUER:              https://<your>.clerk.accounts.dev
+      GSTACK_POOL_AGENTCALL_KEY:   ${AGENTCALL_API_KEY:-}
+      PYTHONUNBUFFERED:            "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+
+  worker:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ..:/app                              # mount the whole repo so server.py is reachable
+    depends_on:
+      - broker
+    command: >
+      sh -c "pip install --quiet aiohttp websockets &&
+             python3 hosted/worker.py
+             --broker ws://broker:8787/v1/workers/connect
+             --key $${GW}
+             --name compose-worker"
+    environment:
+      GW: ${GW:-}
+      AGENTCALL_API_KEY: ${AGENTCALL_API_KEY:-}
+
+volumes:
+  pgdata:

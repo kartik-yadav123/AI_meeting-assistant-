@@ -1,0 +1,45 @@
+# Fly.io deploy config for the gstack broker.
+#
+# Run from the REPO ROOT (not from hosted/broker/), because the
+# Dockerfile pulls in ../../data/ alongside the broker source:
+#
+#   fly launch --no-deploy --name gstack-broker --config hosted/broker/fly.toml
+#   fly postgres create --name gstack-db
+#   fly postgres attach --app gstack-broker gstack-db
+#   fly secrets set --app gstack-broker \
+#     CLERK_JWKS_URL="https://<your>.clerk.accounts.dev/.well-known/jwks.json" \
+#     CLERK_ISSUER="https://<your>.clerk.accounts.dev" \
+#     GSTACK_POOL_AGENTCALL_KEY="ak_ac_..."
+#   fly deploy --config hosted/broker/fly.toml --dockerfile hosted/broker/Dockerfile
+
+app           = "gstack-broker"
+primary_region = "syd"  # Sydney — matches the AP region of the Postgres + closest to AP users
+
+[build]
+  # Resolved relative to this fly.toml. Build CONTEXT is overridden on the
+  # CLI to be the repo root (via `--image-label` / `--dockerfile` from
+  # repo-root cwd) so the Dockerfile can COPY hosted/broker/ + data/.
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port      = 8787
+  force_https        = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes          = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "get"
+    timeout      = "5s"
+    path         = "/healthz"
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 1
+  memory_mb = 512

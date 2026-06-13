@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# gstack-joins-meeting installer.
+#
+# Usage — one-line install (clones + registers skill):
+#   curl -fsSL https://raw.githubusercontent.com/pattern-ai-labs/gstack-joins-meeting/main/install | bash
+#
+# Or, if you've already cloned the repo:
+#   ./install
+#
+# Idempotent — re-run any time (e.g. after `git pull`).
+
+set -euo pipefail
+
+REPO_URL="https://github.com/pattern-ai-labs/gstack-joins-meeting.git"
+SKILL_NAME="gstack-joins-meeting"
+SKILLS_DIR="${HOME}/.claude/skills"
+TARGET="${SKILLS_DIR}/${SKILL_NAME}"
+
+# 1. Locate (or clone) the repo.
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "$(dirname "${BASH_SOURCE[0]}")/SKILL.md" ]]; then
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  # Piped from curl — clone into ~/gstack-joins-meeting.
+  HERE="${HOME}/${SKILL_NAME}"
+  if [[ -d "${HERE}/.git" ]]; then
+    echo "  · ${HERE} exists — pulling latest"
+    git -C "${HERE}" pull --ff-only
+  else
+    echo "  · cloning ${REPO_URL} → ${HERE}"
+    git clone --depth 1 "${REPO_URL}" "${HERE}"
+  fi
+fi
+
+# 2. Sanity check.
+if [[ ! -f "${HERE}/SKILL.md" || ! -f "${HERE}/server.py" ]]; then
+  echo "FATAL: ${HERE} doesn't look like ${SKILL_NAME}" >&2
+  exit 1
+fi
+
+# 3. Symlink into Claude Code skills dir.
+mkdir -p "${SKILLS_DIR}"
+[[ -L "${TARGET}" || -e "${TARGET}" ]] && rm -rf "${TARGET}"
+ln -s "${HERE}" "${TARGET}"
+echo "  ✓ skill registered → ${TARGET}"
+
+# 4. Python check.
+if ! ( cd "${HERE}" && python3 -c "import server, specialist_runner" ) 2>/dev/null; then
+  echo "  ! python3 import failed — need Python 3.10+ on PATH" >&2
+  exit 2
+fi
+echo "  ✓ python OK"
+
+# 5. Vendored bridges.
+for f in vendor/bridge.py vendor/bridge-visual.py; do
+  [[ -f "${HERE}/${f}" ]] || { echo "  ! missing ${f}" >&2; exit 3; }
+done
+echo "  ✓ bridges in place"
+
+# 6. AgentCall key — warn but don't block.
+if [[ ! -f "${HOME}/.agentcall/config.json" && -z "${AGENTCALL_API_KEY:-}" ]]; then
+  cat <<EOF
+
+  ⚠  AgentCall key not found. Sign up at https://agentcall.dev, then:
+       export AGENTCALL_API_KEY="ak_ac_..."
+EOF
+fi
+
+cat <<EOF
+
+  ✅  Installed.
+
+  In Claude Code, just say:
+
+      "Bring the CEO into https://meet.google.com/<your-meet>"
+
+  Or open the dashboard manually:
+      python3 ${HERE}/server.py   →   http://localhost:8765
+
+EOF
